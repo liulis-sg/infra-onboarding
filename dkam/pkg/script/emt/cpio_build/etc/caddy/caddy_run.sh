@@ -67,7 +67,7 @@ export https_proxy="$https_proxy"
 export no_proxy="$no_proxy"
 
 # Update CA certificates
-update-ca-certificates
+update-ca-trust
 echo "Added CA certificates to trust pool"
 
 # Define the log level based on the environment variable

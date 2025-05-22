@@ -148,7 +148,6 @@ extract_emt_tar() {
 	    exit 1
 	fi
 
-
 	if vmlinuz_file=$(find "$iter_folder/emt_uos_x86_64_files/" -name 'vmlinuz*' | head -n 1); then
 	    mv "$vmlinuz_file" "$iter_folder/emt_uos_x86_64_files/vmlinuz-x86_64"
 	    echo "Renamed $vmlinuz_file to vmlinuz-x86_64"
@@ -161,28 +160,35 @@ extract_emt_tar() {
 	mkdir -p $iter_folder/emt_uos_x86_64_files/extract_initramfs
 	zcat $iter_folder/emt_uos_x86_64_files/initramfs-x86_64 | cpio -idmv -D $iter_folder/emt_uos_x86_64_files/extract_initramfs > /dev/null 2>&1
 	rm $iter_folder/emt_uos_x86_64_files/initramfs-x86_64
-        mkdir -p $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp
-	#tar -xvf $iter_folder/emt_uos_x86_64_files/extract_initramfs/rootfs.tar.gz -C $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp > /dev/null 2>&1
-        gzip -d $iter_folder/emt_uos_x86_64_files/extract_initramfs/rootfs.tar.gz
+	mkdir -p $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp
+	gzip -d $iter_folder/emt_uos_x86_64_files/extract_initramfs/rootfs.tar.gz
 	mv $iter_folder/emt_uos_x86_64_files/extract_initramfs/rootfs.tar $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp
-	mkdir -p $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/etc/pki/ca-trust/source/anchors/
-        cp $IDP/Intel.crt $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/etc/pki/ca-trust/source/anchors/
 
-	#Copy env_config file and idp
+	#Copy certs for tink-worker
+	mkdir -p $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/etc/pki/ca-trust/source/anchors/
+	unzip $PWD/IntelSHA2RootChain-Base64.zip -d $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/etc/pki/ca-trust/source/anchors/
+	if [ -z "$(ls "$IDP")" ]; then
+	  echo "$IDP is emtpy"
+	else
+	  cp $IDP/* $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/etc/pki/ca-trust/source/anchors/
+	fi
+
+	#Copy env_config file and add to rootfs.tar
 	tar -uf $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/rootfs.tar -C $PWD ./etc/emt/env_config
-	#Workaround for device-discovery
+
+	#Copy env_config file for device-discovery and add to rootfs.tar
 	mkdir -p $PWD/etc/hook/
 	cp $PWD/etc/emt/env_config $PWD/etc/hook/env_config
 	tar -uf $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/rootfs.tar -C $PWD ./etc/hook/env_config
+
+	#Add idp, fluent-bit and caddy files to rootfs.tar
 	tar -uf $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/rootfs.tar -C $PWD ./etc/idp
-
-        #Copy fluent-bit file and update
 	tar -uf $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/rootfs.tar -C $PWD ./etc/fluent-bit/
-
-	#Copy Caddy files and udpate
 	tar -uf $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/rootfs.tar -C $PWD ./etc/caddy/
 
-        pushd "$iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/" || exit
+	pushd "$iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/" || exit
+
+	#Moidfy Caddy and fluentbit service file
 	tar -xvf rootfs.tar ./usr/lib/systemd/system/caddy.service
 	sed -i 's|ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile|ExecStart=/etc/caddy/caddy_run.sh|' ./usr/lib/systemd/system/caddy.service
 	sed -i '/^\[Unit\]/,/^$/s/^After=network.target network-online.target/After=network.target network-online.target device-discovery.service/' ./usr/lib/systemd/system/caddy.service
@@ -193,22 +199,27 @@ extract_emt_tar() {
 	sed -i '/^\[Unit\]/,/^$/s/^After=network.target/After=network.target caddy.service/' ./usr/lib/systemd/system/fluent-bit.service
 	sed -i '/^\[Unit\]/,/^$/s/^Requires=network.target/Requires=network.target caddy.service/' ./usr/lib/systemd/system/fluent-bit.service
 	
-        tar -uf rootfs.tar ./usr/lib/systemd/system/caddy.service
+	tar -uf rootfs.tar ./usr/lib/systemd/system/caddy.service
 	tar -uf rootfs.tar ./usr/lib/systemd/system/fluent-bit.service
 
-	#Add crt for tink-worker
-	tar -uf rootfs.tar ./etc/pki/ca-trust/source/anchors/Intel.crt
+	#Add crt, service for tink-worker
+	tar -xvf rootfs.tar ./usr/lib/systemd/system/tink-worker.service
+	sed -i '/^\[Service\]/a ExecStartPre=/usr/bin/update-ca-trust' ./usr/lib/systemd/system/tink-worker.service
+	tar -uf rootfs.tar ./usr/lib/systemd/system/tink-worker.service
 
+	tar -uf rootfs.tar ./etc/pki/ca-trust/source/anchors/
+
+	# Compress rootfs
 	gzip -c rootfs.tar > ../rootfs.tar.gz
 	popd || exit
+
 	rm -r $iter_folder/emt_uos_x86_64_files/extract_initramfs/roottmp/
 
 	pushd "$iter_folder/emt_uos_x86_64_files/extract_initramfs/" || exit
 	
-        find . | cpio -o -H newc | gzip -9 > ../initramfs-x86_64
+	find . | cpio -o -H newc | gzip -9 > ../initramfs-x86_64
 
 	popd || exit
-        ls $iter_folder/
 	rm $iter_folder/emt_uos_x86_64.tar.gz
 	rm -rf $iter_folder/emt_uos_x86_64_files/extract_initramfs
 	tar -czvf $iter_folder/emt_uos_x86_64.tar.gz -C $iter_folder/emt_uos_x86_64_files . > /dev/null 2>&1
